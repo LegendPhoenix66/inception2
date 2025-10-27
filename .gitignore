@@ -1,0 +1,7 @@
+# ignore environment and secrets (store locally only)
+srcs/.env
+secrets/*.txt
+
+# common clutter
+.DS_Store
+Thumbs.db
