@@ -16,22 +16,22 @@ build:
 	@sudo mkdir -p $(DATA_PATH)/wordpress
 	@sudo mkdir -p $(DATA_PATH)/mariadb
 	@sudo chown -R $(USER):$(USER) $(DATA_PATH)
-	@docker-compose -f $(COMPOSE_FILE) build
+	@docker compose -f $(COMPOSE_FILE) build
 
 # Start all services
 up:
 	@echo "Starting services..."
-	@docker-compose -f $(COMPOSE_FILE) up -d
+	@docker compose -f $(COMPOSE_FILE) up -d
 
 # Stop all services
 down:
 	@echo "Stopping services..."
-	@docker-compose -f $(COMPOSE_FILE) down
+	@docker compose -f $(COMPOSE_FILE) down
 
 # Stop and remove all containers, networks, and volumes
 clean:
 	@echo "Cleaning up containers, networks, and volumes..."
-	@docker-compose -f $(COMPOSE_FILE) down -v --remove-orphans
+	@docker compose -f $(COMPOSE_FILE) down -v --remove-orphans
 	@docker system prune -af
 
 # Remove all data
@@ -45,17 +45,17 @@ re: fclean all
 
 # Show logs
 logs:
-	@docker-compose -f $(COMPOSE_FILE) logs -f
+	@docker compose -f $(COMPOSE_FILE) logs -f
 
 # Show status of services
 status:
-	@docker-compose -f $(COMPOSE_FILE) ps
+	@docker compose -f $(COMPOSE_FILE) ps
 
 # Restart services
 restart: down up
 
 # Enter a specific container (usage: make exec SERVICE=nginx)
 exec:
-	@docker-compose -f $(COMPOSE_FILE) exec $(SERVICE) /bin/sh
+	@docker compose -f $(COMPOSE_FILE) exec $(SERVICE) /bin/sh
 
 .PHONY: all build up down clean fclean re logs status restart exec
