@@ -5,3 +5,4 @@ secrets/*.txt
 # common clutter
 .DS_Store
 Thumbs.db
+/.idea/
