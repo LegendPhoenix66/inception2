@@ -9,7 +9,7 @@ DOMAIN="${DOMAIN_NAME:-localhost}"
 
 # Inject domain name into NGINX server_name
 if [ -f /etc/nginx/http.d/default.conf ]; then
-    sed -i "s/server_name .*/server_name ${DOMAIN};/" /etc/nginx/http.d/default.conf
+    sed -i "s/server_name .*/server_name ${DOMAIN} localhost 127.0.0.1;/" /etc/nginx/http.d/default.conf
 fi
 
 # Test NGINX configuration

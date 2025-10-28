@@ -1,9 +1,11 @@
 #!/bin/sh
 set -e
 
-# Create log directory
+# Create required directories and set permissions
 mkdir -p /var/log/mysql
-chown mysql:mysql /var/log/mysql
+mkdir -p /run/mysqld
+chown -R mysql:mysql /var/log/mysql /run/mysqld /var/lib/mysql || true
+chmod 0750 /var/lib/mysql || true
 
 # Initialize database directory if it doesn't exist
 FIRST_RUN=0
@@ -15,23 +17,36 @@ fi
 
 # Run initial SQL setup only on first-run
 if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
+    # Read passwords from secrets early (for ping/auth)
+    DB_ROOT_PASSWORD=$(cat /run/secrets/db_root_password)
+    DB_PASSWORD=$(cat /run/secrets/db_password)
+
     # Start MariaDB in background for initial setup
     mysqld_safe --user=mysql --datadir=/var/lib/mysql &
     MYSQL_PID=$!
 
-    # Wait for MariaDB to start
+    # Wait for MariaDB to start (try both unauthenticated and with root secret)
     echo "Waiting for MariaDB to start..."
-    while ! mysqladmin ping --silent; do
+    while true; do
+        if mysqladmin ping --silent >/dev/null 2>&1; then
+            break
+        fi
+        if mysqladmin -p"$DB_ROOT_PASSWORD" ping --silent >/dev/null 2>&1; then
+            break
+        fi
         sleep 1
     done
 
-    # Read passwords from secrets
-    DB_ROOT_PASSWORD=$(cat /run/secrets/db_root_password)
-    DB_PASSWORD=$(cat /run/secrets/db_password)
+    # Determine root auth method
+    if mysql -uroot -p"$DB_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+        ROOT_AUTH="-uroot -p$DB_ROOT_PASSWORD"
+    else
+        ROOT_AUTH="-uroot"
+    fi
 
-    # Set root password and create database/user
-    mysql -u root << EOF
--- Set root password
+    # Set root password (idempotent) and create database/user
+    mysql $ROOT_AUTH << EOF
+-- Set root password (safe if already set)
 ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';
 
 -- Create database

@@ -27,11 +27,11 @@ RUN apk update && apk add --no-cache \
     netcat-openbsd \
     && rm -rf /var/cache/apk/*
 
-# Create necessary directories
+# Create necessary directories and ensure www-data user/group exist (idempotent)
 RUN mkdir -p /var/www/html \
     && mkdir -p /run/php \
-    && addgroup -S www-data \
-    && adduser -D -S -h /var/www/html -s /sbin/nologin -G www-data www-data
+    && (grep -q '^www-data:' /etc/group || addgroup -S www-data) \
+    && (id -u www-data >/dev/null 2>&1 || adduser -D -S -h /var/www/html -s /sbin/nologin -G www-data www-data)
 
 # Copy PHP-FPM configuration
 COPY conf/www.conf /etc/php81/php-fpm.d/www.conf
