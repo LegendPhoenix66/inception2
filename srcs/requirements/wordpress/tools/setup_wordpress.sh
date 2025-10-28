@@ -46,8 +46,8 @@ if [ ! -f "/var/www/html/wp-config.php" ]; then
     tar -xzf latest.tar.gz --strip-components=1
     rm latest.tar.gz
 
-    # Download WP-CLI
-    wget https://raw.githubusercontent.com/wp-cli/wp-cli/v2.8.1/wp-cli.phar
+    # Download WP-CLI (stable build)
+    wget -O wp-cli.phar https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 
@@ -85,9 +85,17 @@ if [ ! -f "/var/www/html/wp-config.php" ]; then
     echo "WordPress installation completed!"
 fi
 
+# If wp-config.php was inherited from another image/setup and reads Docker secrets at runtime,
+# replace that with the actual DB password value (our PHP-FPM runs as www-data and cannot read /run/secrets).
+if grep -q "/run/secrets/db_password" /var/www/html/wp-config.php 2>/dev/null; then
+    echo "Patching wp-config.php to embed DB password instead of reading Docker secrets at runtime..."
+    sed -i "s|file_get_contents('/run/secrets/db_password')|'$DB_PASSWORD'|g" /var/www/html/wp-config.php || true
+    sed -i 's|file_get_contents("/run/secrets/db_password")|'"$DB_PASSWORD"'|g' /var/www/html/wp-config.php || true
+fi
+
 # Set proper permissions
-chown -R www-data:www-data /var/www/html
-chmod -R 755 /var/www/html
+chown -R www-data:www-data /var/www/html || true
+chmod -R 755 /var/www/html || true
 
 echo "Starting PHP-FPM..."
 exec php-fpm81 -F

@@ -27,6 +27,9 @@ RUN apk update && apk add --no-cache \
     netcat-openbsd \
     && rm -rf /var/cache/apk/*
 
+# Provide php CLI under /usr/bin/php for WP-CLI
+RUN ln -sf /usr/bin/php81 /usr/bin/php
+
 # Create necessary directories and ensure www-data user/group exist (idempotent)
 RUN mkdir -p /var/www/html \
     && mkdir -p /run/php \
