@@ -15,7 +15,7 @@ ENVDIR="$REPO_ROOT/srcs"
 ENV_FILE="$ENVDIR/.env"
 
 # Defaults (can be overridden via environment variables when invoking the script)
-DEFAULT_DOMAIN_NAME=${DOMAIN_NAME:-localhost}
+DEFAULT_DOMAIN_NAME=${DOMAIN_NAME:-lhopp.42.fr}
 DEFAULT_DB_NAME=${MYSQL_DATABASE:-wordpress}
 DEFAULT_DB_USER=${MYSQL_USER:-wpuser}
 
