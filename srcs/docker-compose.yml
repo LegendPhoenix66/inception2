@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   mariadb:
     build:
@@ -23,11 +21,12 @@ services:
     expose:
       - "3306"
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -uroot -p$$(cat /run/secrets/db_root_password) --silent || exit 1"]
+      # Try socket ping first (works before network is fully ready), then password ping as fallback
+      test: ["CMD-SHELL", "mysqladmin --protocol=socket ping --silent || mysqladmin --protocol=socket -uroot -p$$(cat /run/secrets/db_root_password) ping --silent || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
-      start_period: 10s
+      start_period: 45s
 
   wordpress:
     build:

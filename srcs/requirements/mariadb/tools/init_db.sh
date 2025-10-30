@@ -1,6 +1,21 @@
 #!/bin/sh
 set -e
 
+log() {
+  echo "[init_db] $1"
+}
+
+# Validate secrets early to fail fast with a clear message
+if [ ! -f /run/secrets/db_root_password ]; then
+  log "Missing secret: /run/secrets/db_root_password"; exit 1
+fi
+if [ ! -f /run/secrets/db_password ]; then
+  log "Missing secret: /run/secrets/db_password"; exit 1
+fi
+
+DB_ROOT_PASSWORD=$(cat /run/secrets/db_root_password)
+DB_PASSWORD=$(cat /run/secrets/db_password)
+
 # Create required directories and set permissions
 mkdir -p /var/log/mysql
 mkdir -p /run/mysqld
@@ -10,67 +25,67 @@ chmod 0750 /var/lib/mysql || true
 # Initialize database directory if it doesn't exist
 FIRST_RUN=0
 if [ ! -d "/var/lib/mysql/mysql" ]; then
-    echo "Initializing MariaDB database directory..."
-    mysql_install_db --user=mysql --datadir=/var/lib/mysql
+    log "Initializing MariaDB data directory..."
+    if command -v mariadb-install-db >/dev/null 2>&1; then
+      mariadb-install-db --user=mysql --datadir=/var/lib/mysql --auth-root-authentication-method=normal
+    else
+      # Fallback for environments where mysql_install_db is present
+      mysql_install_db --user=mysql --datadir=/var/lib/mysql || true
+    fi
     FIRST_RUN=1
 fi
 
-# Run initial SQL setup only on first-run
+# Bootstrap only if never initialized
 if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
-    # Read passwords from secrets early (for ping/auth)
-    DB_ROOT_PASSWORD=$(cat /run/secrets/db_root_password)
-    DB_PASSWORD=$(cat /run/secrets/db_password)
+    SOCKET_PATH="/run/mysqld/mysqld.sock"
+    PID_FILE="/run/mysqld/mysqld.pid"
 
-    # Start MariaDB in background for initial setup
-    mysqld_safe --user=mysql --datadir=/var/lib/mysql &
+    log "Starting MariaDB temporarily for bootstrap..."
+    mysqld --user=mysql \
+           --datadir=/var/lib/mysql \
+           --socket="$SOCKET_PATH" \
+           --pid-file="$PID_FILE" \
+           --skip-networking=0 &
     MYSQL_PID=$!
 
-    # Wait for MariaDB to start (try both unauthenticated and with root secret)
-    echo "Waiting for MariaDB to start..."
-    while true; do
-        if mysqladmin ping --silent >/dev/null 2>&1; then
-            break
-        fi
-        if mysqladmin -p"$DB_ROOT_PASSWORD" ping --silent >/dev/null 2>&1; then
-            break
-        fi
-        sleep 1
+    # Wait for server to accept connections on socket
+    log "Waiting for MariaDB to become ready..."
+    ATTEMPTS=0
+    until mysqladmin --protocol=socket --socket="$SOCKET_PATH" ping --silent >/dev/null 2>&1; do
+      ATTEMPTS=$((ATTEMPTS+1))
+      if [ $ATTEMPTS -ge 120 ]; then
+        log "MariaDB did not become ready in time"; exit 1
+      fi
+      sleep 1
     done
 
-    # Determine root auth method
-    if mysql -uroot -p"$DB_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
-        ROOT_AUTH="-uroot -p$DB_ROOT_PASSWORD"
-    else
-        ROOT_AUTH="-uroot"
+    # Set root password and create database/user using socket auth first
+    log "Applying initial database configuration..."
+    mysql --protocol=socket --socket="$SOCKET_PATH" -uroot <<-SQL
+      ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
+      CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE};
+      CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
+      GRANT ALL PRIVILEGES ON ${MYSQL_DATABASE}.* TO '${MYSQL_USER}'@'%';
+      DELETE FROM mysql.user WHERE User='';
+      DROP DATABASE IF EXISTS test;
+      FLUSH PRIVILEGES;
+SQL
+
+    # Shutdown bootstrap server cleanly (try with password, then without)
+    if ! mysqladmin --protocol=socket --socket="$SOCKET_PATH" -uroot -p"$DB_ROOT_PASSWORD" shutdown >/dev/null 2>&1; then
+      mysqladmin --protocol=socket --socket="$SOCKET_PATH" -uroot shutdown >/dev/null 2>&1 || true
     fi
 
-    # Set root password (idempotent) and create database/user
-    mysql $ROOT_AUTH << EOF
--- Set root password (safe if already set)
-ALTER USER 'root'@'localhost' IDENTIFIED BY '$DB_ROOT_PASSWORD';
-
--- Create database
-CREATE DATABASE IF NOT EXISTS $MYSQL_DATABASE;
-
--- Create user and grant privileges
-CREATE USER IF NOT EXISTS '$MYSQL_USER'@'%' IDENTIFIED BY '$DB_PASSWORD';
-GRANT ALL PRIVILEGES ON $MYSQL_DATABASE.* TO '$MYSQL_USER'@'%';
-
--- Remove anonymous users and test database
-DELETE FROM mysql.user WHERE User='';
-DROP DATABASE IF EXISTS test;
-
--- Flush privileges
-FLUSH PRIVILEGES;
-EOF
-
-    # Stop the background MariaDB process
-    kill $MYSQL_PID
-    wait $MYSQL_PID
+    # Ensure the background process is gone
+    if kill -0 $MYSQL_PID >/dev/null 2>&1; then
+      kill $MYSQL_PID || true
+      wait $MYSQL_PID || true
+    fi
 
     touch /var/lib/mysql/.initialized
-    echo "MariaDB initialization completed."
+    log "MariaDB initialization completed."
 fi
 
-# Start MariaDB in foreground
-exec mysqld --user=mysql --datadir=/var/lib/mysql
+# Exec mysqld in foreground as PID 1
+log "Starting MariaDB server..."
+exec mysqld --user=mysql --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock --pid-file=/run/mysqld/mysqld.pid
