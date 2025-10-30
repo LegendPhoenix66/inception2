@@ -59,9 +59,20 @@ if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
       sleep 1
     done
 
-    # Set root password and create database/user using socket auth first
+    # Determine a working root authentication method (no password first, then secret)
+    ROOT_FLAGS="-uroot"
+    if mysql --protocol=socket --socket="$SOCKET_PATH" $ROOT_FLAGS -e "SELECT 1;" >/dev/null 2>&1; then
+      :
+    elif mysql --protocol=socket --socket="$SOCKET_PATH" -uroot -p"$DB_ROOT_PASSWORD" -e "SELECT 1;" >/dev/null 2>&1; then
+      ROOT_FLAGS="-uroot -p$DB_ROOT_PASSWORD"
+    else
+      log "Unable to authenticate as root for bootstrap (tried no password and provided password)."
+      exit 1
+    fi
+
+    # Apply configuration using determined root auth
     log "Applying initial database configuration..."
-    mysql --protocol=socket --socket="$SOCKET_PATH" -uroot <<-SQL
+    mysql --protocol=socket --socket="$SOCKET_PATH" $ROOT_FLAGS <<-SQL
       ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
       CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE};
       CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
