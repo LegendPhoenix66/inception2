@@ -263,12 +263,30 @@ EOF
 prepare_data_dirs() {
   local datapath
   datapath=$(awk -F= '/^DATA_PATH=/{print $2}' "$ENV_FILE" | tail -n1)
-  if [ -z "$datapath" ]; then
+  if [ -z "${datapath}" ]; then
     datapath="$DEFAULT_DATA_PATH"
   fi
   info "Ensuring data directories exist under $datapath"
+  # Create parent and service-specific dirs with sudo (idempotent)
   sudo mkdir -p "$datapath/wordpress" "$datapath/mariadb"
-  sudo chown -R "$RUN_USER":"$RUN_USER" "$datapath" || true
+
+  # If the directories are not owned by the intended runtime user, correct ownership.
+  # This is necessary when system processes (apt/_apt) or root previously created them.
+  # Use sudo safely; if sudo is not available the chown will be skipped.
+  if [ -d "$datapath" ]; then
+    current_owner_uid=$(stat -c '%u' "$datapath" 2>/dev/null || echo "0")
+    target_uid=$(id -u "$RUN_USER" 2>/dev/null || echo "0")
+    if [ "${current_owner_uid}" != "${target_uid}" ]; then
+      warn "Fixing ownership of $datapath (was UID=${current_owner_uid}) -> $RUN_USER (UID=${target_uid})"
+      sudo chown -R "$RUN_USER":"$RUN_USER" "$datapath" || true
+    else
+      info "Ownership of $datapath already set to $RUN_USER"
+    fi
+  fi
+
+  # Ensure reasonable permissions on the service directories so containers can create files.
+  sudo chmod 750 "$datapath" || true
+  sudo chmod 750 "$datapath/wordpress" "$datapath/mariadb" || true
 }
 
 ensure_hosts_mapping() {
