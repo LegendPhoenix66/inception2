@@ -79,18 +79,25 @@ if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
 
     # Apply configuration using determined root auth
     log "Applying initial database configuration..."
-    # Build SQL safely in a shell string (escape backticks so the shell doesn't treat them as command substitution)
-    SQL_CMD="ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';"
-    SQL_CMD+="\nCREATE DATABASE IF NOT EXISTS \`\${MYSQL_DATABASE}\`;"
-    SQL_CMD+="\nCREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"
-    SQL_CMD+="\nGRANT ALL PRIVILEGES ON \`\${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';"
-    SQL_CMD+="\nDELETE FROM mysql.user WHERE User='';"
-    SQL_CMD+="\nDROP DATABASE IF EXISTS test;"
-    SQL_CMD+="\nFLUSH PRIVILEGES;"
 
-    # Expand environment variables into the SQL command and execute via -e
-    # Note: we escape backticks above so the shell won't try to run them.
-    eval "mysql --protocol=socket --socket=\"$SOCKET_PATH\" $ROOT_FLAGS -e \"$SQL_CMD\""
+    # Build SQL in a POSIX-compatible way and escape backticks so the shell won't try to execute them
+    SQL_CMD="ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';"
+    SQL_CMD="$SQL_CMD
+CREATE DATABASE IF NOT EXISTS \`${MYSQL_DATABASE}\`;"
+    SQL_CMD="$SQL_CMD
+CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"
+    SQL_CMD="$SQL_CMD
+GRANT ALL PRIVILEGES ON \`${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';"
+    SQL_CMD="$SQL_CMD
+DELETE FROM mysql.user WHERE User='';"
+    SQL_CMD="$SQL_CMD
+DROP DATABASE IF EXISTS test;"
+    SQL_CMD="$SQL_CMD
+FLUSH PRIVILEGES;"
+
+    # Pipe the SQL to mysql to avoid eval and quoting issues
+    printf '%s
+' "$SQL_CMD" | mysql --protocol=socket --socket="$SOCKET_PATH" $ROOT_FLAGS
 
     # Shutdown bootstrap server cleanly (try with password, then without)
     if ! mysqladmin --protocol=socket --socket="$SOCKET_PATH" -uroot -p"$DB_ROOT_PASSWORD" shutdown >/dev/null 2>&1; then
