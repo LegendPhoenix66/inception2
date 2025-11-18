@@ -299,10 +299,20 @@ prepare_data_dirs() {
     MARIADB_CTX="$REPO_ROOT/srcs/requirements/mariadb"
     # Build a temporary image quietly (tagged uniquely)
     TMP_IMAGE_TAG="inception_mariadb_detect:tmp"
+    # Try building with current docker permissions; if it fails, attempt with sudo
+    BUILT=0
     if docker build -q -t "$TMP_IMAGE_TAG" "$MARIADB_CTX" >/dev/null 2>&1; then
-      # Get numeric uid/gid for mysql user inside the built image
-      uid=$(docker run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -u mysql' 2>/dev/null || true)
-      gid=$(docker run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -g mysql' 2>/dev/null || true)
+      DOCKER_RUN_CMD="docker"
+      BUILT=1
+    elif sudo docker build -q -t "$TMP_IMAGE_TAG" "$MARIADB_CTX" >/dev/null 2>&1; then
+      DOCKER_RUN_CMD="sudo docker"
+      BUILT=1
+    fi
+
+    if [ "$BUILT" -eq 1 ]; then
+      # Get numeric uid/gid for mysql user inside the built image using the command that succeeded
+      uid=$($DOCKER_RUN_CMD run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -u mysql' 2>/dev/null || true)
+      gid=$($DOCKER_RUN_CMD run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -g mysql' 2>/dev/null || true)
       if [ -n "$uid" ] && [ -n "$gid" ]; then
         info "Detected mysql UID:GID = ${uid}:${gid}; applying ownership to $datapath/mariadb"
         sudo chown -R "${uid}:${gid}" "$datapath/mariadb" || true
@@ -311,9 +321,9 @@ prepare_data_dirs() {
         warn "Could not detect mysql UID/GID inside temp image; leaving ownership as-is"
       fi
       # Remove temporary image to keep system clean
-      docker rmi -f "$TMP_IMAGE_TAG" >/dev/null 2>&1 || true
+      $DOCKER_RUN_CMD rmi -f "$TMP_IMAGE_TAG" >/dev/null 2>&1 || true
     else
-      warn "Failed to build temporary mariadb image for UID/GID detection; skipping numeric chown"
+      warn "Failed to build temporary mariadb image for UID/GID detection even with sudo; skipping numeric chown"
     fi
   fi
 }
