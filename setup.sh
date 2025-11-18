@@ -285,8 +285,12 @@ prepare_data_dirs() {
   fi
 
   # Ensure reasonable permissions on the service directories so containers can create files.
+  # Keep the parent directory restricted but make the WordPress webroot world-readable
+  # because the nginx user inside the container may have a different UID/GID than the host user.
+  # MariaDB data remains more restricted.
   sudo chmod 750 "$datapath" || true
-  sudo chmod 750 "$datapath/wordpress" "$datapath/mariadb" || true
+  sudo chmod 755 "$datapath/wordpress" || true
+  sudo chmod 750 "$datapath/mariadb" || true
 }
 
 ensure_hosts_mapping() {
