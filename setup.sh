@@ -42,10 +42,10 @@ need_cmd() {
 }
 
 # CLI flags (set via arguments)
-CLEAN=false
-FORCE=false
-WIPE_SECRETS=false
-REMOVE_IMAGES=false
+CLEAN=true
+FORCE=true
+WIPE_SECRETS=true
+REMOVE_IMAGES=true
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
