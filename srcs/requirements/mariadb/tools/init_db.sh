@@ -16,6 +16,13 @@ fi
 DB_ROOT_PASSWORD=$(cat /run/secrets/db_root_password)
 DB_PASSWORD=$(cat /run/secrets/db_password)
 
+# Ensure sensible defaults for database/user to avoid empty identifiers in SQL
+# (These can be overridden via environment variables passed by docker-compose)
+: ${MYSQL_DATABASE:="wordpress"}
+: ${MYSQL_USER:="wpuser"}
+
+log "Using MYSQL_DATABASE=${MYSQL_DATABASE} MYSQL_USER=${MYSQL_USER}"
+
 # Create required directories and set permissions
 mkdir -p /var/log/mysql
 mkdir -p /run/mysqld
@@ -73,10 +80,12 @@ if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
     # Apply configuration using determined root auth
     log "Applying initial database configuration..."
     mysql --protocol=socket --socket="$SOCKET_PATH" $ROOT_FLAGS <<-SQL
+      -- set SQL mode safe quoting for identifiers
       ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-      CREATE DATABASE IF NOT EXISTS ${MYSQL_DATABASE};
+      CREATE DATABASE IF NOT EXISTS \
+        \\`\${MYSQL_DATABASE}\\`;
       CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
-      GRANT ALL PRIVILEGES ON ${MYSQL_DATABASE}.* TO '${MYSQL_USER}'@'%';
+      GRANT ALL PRIVILEGES ON \\`\${MYSQL_DATABASE}\\`.* TO '${MYSQL_USER}'@'%';
       DELETE FROM mysql.user WHERE User='';
       DROP DATABASE IF EXISTS test;
       FLUSH PRIVILEGES;

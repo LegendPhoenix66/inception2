@@ -6,6 +6,14 @@ mkdir -p /var/lib/php81/sessions
 mkdir -p /var/log
 chown -R www-data:www-data /var/lib/php81/sessions
 
+# Read database password early from secret so it's available for later patches and wp-cli
+if [ -f /run/secrets/db_password ]; then
+    DB_PASSWORD=$(cat /run/secrets/db_password)
+    export DB_PASSWORD
+else
+    echo "Missing /run/secrets/db_password"; exit 1
+fi
+
 # Wait for MariaDB to be ready
 echo "Waiting for MariaDB to be ready..."
 while ! nc -z mariadb 3306; do
@@ -51,10 +59,7 @@ if [ ! -f "/var/www/html/wp-config.php" ]; then
     chmod +x wp-cli.phar
     mv wp-cli.phar /usr/local/bin/wp
 
-    # Read database password from secrets
-    DB_PASSWORD=$(cat /run/secrets/db_password)
-
-    # Create wp-config.php
+    # Create wp-config.php using the DB_PASSWORD read from secret earlier
     wp config create \
         --dbname="$WORDPRESS_DB_NAME" \
         --dbuser="$WORDPRESS_DB_USER" \
@@ -90,7 +95,7 @@ fi
 if grep -q "/run/secrets/db_password" /var/www/html/wp-config.php 2>/dev/null; then
     echo "Patching wp-config.php to embed DB password instead of reading Docker secrets at runtime..."
     sed -i "s|file_get_contents('/run/secrets/db_password')|'$DB_PASSWORD'|g" /var/www/html/wp-config.php || true
-    sed -i 's|file_get_contents("/run/secrets/db_password")|'"$DB_PASSWORD"'|g' /var/www/html/wp-config.php || true
+    sed -i 's|file_get_contents("/run/secrets/db_password")|"'$DB_PASSWORD'"|g' /var/www/html/wp-config.php || true
 fi
 
 # Set proper permissions
