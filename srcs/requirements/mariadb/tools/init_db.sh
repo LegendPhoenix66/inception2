@@ -79,17 +79,18 @@ if [ $FIRST_RUN -eq 1 ] || [ ! -f "/var/lib/mysql/.initialized" ]; then
 
     # Apply configuration using determined root auth
     log "Applying initial database configuration..."
-    mysql --protocol=socket --socket="$SOCKET_PATH" $ROOT_FLAGS <<-SQL
-      -- set SQL mode safe quoting for identifiers
-      ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-      CREATE DATABASE IF NOT EXISTS \
-        \\`\${MYSQL_DATABASE}\\`;
-      CREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
-      GRANT ALL PRIVILEGES ON \\`\${MYSQL_DATABASE}\\`.* TO '${MYSQL_USER}'@'%';
-      DELETE FROM mysql.user WHERE User='';
-      DROP DATABASE IF EXISTS test;
-      FLUSH PRIVILEGES;
-SQL
+    # Build SQL safely in a shell string (escape backticks so the shell doesn't treat them as command substitution)
+    SQL_CMD="ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';"
+    SQL_CMD+="\nCREATE DATABASE IF NOT EXISTS \`\${MYSQL_DATABASE}\`;"
+    SQL_CMD+="\nCREATE USER IF NOT EXISTS '${MYSQL_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';"
+    SQL_CMD+="\nGRANT ALL PRIVILEGES ON \`\${MYSQL_DATABASE}\`.* TO '${MYSQL_USER}'@'%';"
+    SQL_CMD+="\nDELETE FROM mysql.user WHERE User='';"
+    SQL_CMD+="\nDROP DATABASE IF EXISTS test;"
+    SQL_CMD+="\nFLUSH PRIVILEGES;"
+
+    # Expand environment variables into the SQL command and execute via -e
+    # Note: we escape backticks above so the shell won't try to run them.
+    eval "mysql --protocol=socket --socket=\"$SOCKET_PATH\" $ROOT_FLAGS -e \"$SQL_CMD\""
 
     # Shutdown bootstrap server cleanly (try with password, then without)
     if ! mysqladmin --protocol=socket --socket="$SOCKET_PATH" -uroot -p"$DB_ROOT_PASSWORD" shutdown >/dev/null 2>&1; then
@@ -158,4 +159,3 @@ fi
 # Exec mysqld in foreground as PID 1
 log "Starting MariaDB server..."
 exec mysqld --user=mysql --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock --pid-file=/run/mysqld/mysqld.pid
-
