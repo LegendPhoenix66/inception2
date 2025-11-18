@@ -41,6 +41,51 @@ need_cmd() {
   command -v "$1" >/dev/null 2>&1
 }
 
+# CLI flags (set via arguments)
+CLEAN=false
+FORCE=false
+WIPE_SECRETS=false
+REMOVE_IMAGES=false
+
+parse_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --clean|-c|--clean-all)
+        CLEAN=true
+        shift
+        ;;
+      --yes|-y|--force)
+        FORCE=true
+        shift
+        ;;
+      --wipe-secrets)
+        WIPE_SECRETS=true
+        shift
+        ;;
+      --remove-images)
+        REMOVE_IMAGES=true
+        shift
+        ;;
+      --help|-h)
+        cat <<EOF
+Usage: $0 [options]
+Options:
+  --clean, -c          Perform cleanup of containers, volumes, networks and host data dirs before setup
+  --yes, -y            Non-interactive; assume 'yes' to cleanup prompts
+  --wipe-secrets       Also remove secrets/ directory contents when cleaning (destructive)
+  --remove-images      Also remove built images produced by this project (destructive)
+  --help, -h           Show this help
+EOF
+        exit 0
+        ;;
+      *)
+        # Pass-through for future options
+        shift
+        ;;
+    esac
+  done
+}
+
 install_dependencies_debian() {
   info "Detected Debian/Ubuntu. Installing dependencies (requires sudo)..."
   sudo apt-get update -y
@@ -356,7 +401,104 @@ ensure_hosts_mapping() {
   echo "127.0.0.1 $domain" | sudo tee -a /etc/hosts >/dev/null
 }
 
+# New: utility to compute DATA_PATH (reads env or uses default)
+get_data_path() {
+  if [ -f "$ENV_FILE" ]; then
+    local dp
+    dp=$(awk -F= '/^DATA_PATH=/{print $2}' "$ENV_FILE" | tail -n1 || true)
+    if [ -n "$dp" ]; then
+      echo "$dp"
+      return
+    fi
+  fi
+  echo "$DEFAULT_DATA_PATH"
+}
+
+perform_cleanup() {
+  local datapath
+  datapath=$(get_data_path)
+
+  info "Cleanup requested. This will stop containers, remove volumes/networks, and delete host data under: $datapath"
+  if [ "$WIPE_SECRETS" = true ]; then
+    warn "--wipe-secrets specified: secrets/* will be removed"
+  fi
+  if [ "$REMOVE_IMAGES" = true ]; then
+    warn "--remove-images specified: built images will be removed"
+  fi
+
+  if [ "$FORCE" != true ]; then
+    echo
+    read -r -p "Are you sure you want to proceed? This will DELETE data under $datapath and stop/remove containers (y/N): " ans
+    case "$ans" in
+      [Yy]* ) ;;
+      * ) info "Cleanup aborted by user"; return 0 ;;
+    esac
+  else
+    info "--yes specified: proceeding non-interactively"
+  fi
+
+  # Try docker compose down first (v2 or v1)
+  info "Stopping and removing compose stack (if running)"
+  if docker compose -f srcs/docker-compose.yml down --volumes --remove-orphans >/dev/null 2>&1; then
+    info "docker compose down completed"
+  elif docker-compose -f srcs/docker-compose.yml down --volumes --remove-orphans >/dev/null 2>&1; then
+    info "docker-compose down completed"
+  else
+    warn "docker compose down failed or not available; continuing with manual cleanup"
+  fi
+
+  # Force remove possible lingering containers by name
+  for c in mariadb wordpress nginx; do
+    if docker ps -a --format '{{.Names}}' | grep -xq "$c"; then
+      info "Removing container $c"
+      docker rm -f "$c" >/dev/null 2>&1 || true
+    fi
+  done
+
+  # Remove named volumes used by compose (best-effort)
+  info "Removing Docker volumes (mariadb_data, wordpress_data) if present"
+  docker volume rm mariadb_data wordpress_data >/dev/null 2>&1 || true
+
+  # Remove the project network if present
+  info "Removing Docker network 'inception' if present"
+  docker network rm inception >/dev/null 2>&1 || true
+
+  # Optionally remove images built from the repo
+  if [ "$REMOVE_IMAGES" = true ]; then
+    info "Removing local images built from this project (srcs-*)"
+    docker rmi srcs-mariadb srcs-wordpress srcs-nginx >/dev/null 2>&1 || true
+  fi
+
+  # Remove host data directories (destructive)
+  if [ -d "$datapath" ]; then
+    info "Deleting host data directories under $datapath (destructive)"
+    sudo rm -rf "$datapath/wordpress" "$datapath/mariadb" || true
+    # Recreate empty dirs with correct ownership/permissions
+    sudo mkdir -p "$datapath/wordpress" "$datapath/mariadb" || true
+    sudo chown -R "$RUN_USER":"$RUN_USER" "$datapath" || true
+    sudo chmod 755 "$datapath/wordpress" || true
+    sudo chmod 750 "$datapath/mariadb" || true
+  fi
+
+  # Optionally wipe secrets
+  if [ "$WIPE_SECRETS" = true ]; then
+    info "Wiping secrets directory contents"
+    sudo rm -rf "$SECRETS_DIR"/* || true
+    mkdir -p "$SECRETS_DIR" || true
+    sudo chown -R "$RUN_USER":"$RUN_USER" "$SECRETS_DIR" || true
+    chmod 700 "$SECRETS_DIR" || true
+  fi
+
+  info "Cleanup completed"
+}
+
 main() {
+  parse_args "$@"
+
+  if [ "$CLEAN" = true ]; then
+    perform_cleanup
+  fi
+
   info "Starting Inception setup"
   install_dependencies
   ensure_secrets
