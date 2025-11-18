@@ -324,6 +324,9 @@ prepare_data_dirs() {
       $DOCKER_RUN_CMD rmi -f "$TMP_IMAGE_TAG" >/dev/null 2>&1 || true
     else
       warn "Failed to build temporary mariadb image for UID/GID detection even with sudo; skipping numeric chown"
+      # Fallback for development VMs: make the mariadb data dir permissive so the container can access it.
+      warn "Applying permissive fallback: making $datapath/mariadb world-writable (dev only) to avoid permission issues"
+      sudo chmod -R 0777 "$datapath/mariadb" || true
     fi
   fi
 }
