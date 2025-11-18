@@ -291,6 +291,31 @@ prepare_data_dirs() {
   sudo chmod 750 "$datapath" || true
   sudo chmod 755 "$datapath/wordpress" || true
   sudo chmod 750 "$datapath/mariadb" || true
+
+  # Attempt to detect mariadb's numeric UID/GID from a local image and set ownership
+  # This helps avoid permission issues when host UIDs differ from container UIDs.
+  if command -v docker >/dev/null 2>&1; then
+    info "Trying to detect mariadb user UID/GID from local Dockerfile to set host ownership"
+    MARIADB_CTX="$REPO_ROOT/srcs/requirements/mariadb"
+    # Build a temporary image quietly (tagged uniquely)
+    TMP_IMAGE_TAG="inception_mariadb_detect:tmp"
+    if docker build -q -t "$TMP_IMAGE_TAG" "$MARIADB_CTX" >/dev/null 2>&1; then
+      # Get numeric uid/gid for mysql user inside the built image
+      uid=$(docker run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -u mysql' 2>/dev/null || true)
+      gid=$(docker run --rm --entrypoint sh "$TMP_IMAGE_TAG" -c 'id -g mysql' 2>/dev/null || true)
+      if [ -n "$uid" ] && [ -n "$gid" ]; then
+        info "Detected mysql UID:GID = ${uid}:${gid}; applying ownership to $datapath/mariadb"
+        sudo chown -R "${uid}:${gid}" "$datapath/mariadb" || true
+        sudo chmod -R 750 "$datapath/mariadb" || true
+      else
+        warn "Could not detect mysql UID/GID inside temp image; leaving ownership as-is"
+      fi
+      # Remove temporary image to keep system clean
+      docker rmi -f "$TMP_IMAGE_TAG" >/dev/null 2>&1 || true
+    else
+      warn "Failed to build temporary mariadb image for UID/GID detection; skipping numeric chown"
+    fi
+  fi
 }
 
 ensure_hosts_mapping() {
