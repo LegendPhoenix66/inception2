@@ -3,6 +3,7 @@ services:
     build:
       context: ./requirements/mariadb
       dockerfile: Dockerfile
+    image: mariadb:1.0
     container_name: mariadb
     # Use the locally built image to avoid pulling the official 'mariadb' image by name
     restart: unless-stopped
@@ -32,6 +33,7 @@ services:
     build:
       context: ./requirements/wordpress
       dockerfile: Dockerfile
+    image: wordpress:1.0
     container_name: wordpress
     # Use the locally built image to avoid pulling the official 'wordpress' image by name
     restart: unless-stopped
@@ -64,6 +66,7 @@ services:
     build:
       context: ./requirements/nginx
       dockerfile: Dockerfile
+    image: nginx:1.0
     container_name: nginx
     # Use the locally built image to avoid pulling the official 'nginx' image by name
     restart: unless-stopped
