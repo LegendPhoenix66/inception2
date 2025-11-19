@@ -6,6 +6,7 @@ set -Eeuo pipefail
 # - Creates/updates srcs/.env
 # - Generates secure secrets in secrets/
 # - Prepares host data directories used by bind mounts
+# - Optionally performs a fresh, no-cache docker build of project images
 # After this script completes, you should be able to run: make up
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -46,6 +47,8 @@ CLEAN=true
 FORCE=true
 WIPE_SECRETS=true
 REMOVE_IMAGES=true
+# Whether to build images (no-cache) at the end of setup. Can be overridden by env var BUILD_IMAGES=false
+BUILD_IMAGES=${BUILD_IMAGES:-true}
 
 parse_args() {
   while [ "$#" -gt 0 ]; do
@@ -66,6 +69,10 @@ parse_args() {
         REMOVE_IMAGES=true
         shift
         ;;
+      --no-build)
+        BUILD_IMAGES=false
+        shift
+        ;;
       --help|-h)
         cat <<EOF
 Usage: $0 [options]
@@ -74,6 +81,7 @@ Options:
   --yes, -y            Non-interactive; assume 'yes' to cleanup prompts
   --wipe-secrets       Also remove secrets/ directory contents when cleaning (destructive)
   --remove-images      Also remove built images produced by this project (destructive)
+  --no-build           Do not attempt to build Docker images after setup
   --help, -h           Show this help
 EOF
         exit 0
@@ -465,8 +473,19 @@ perform_cleanup() {
 
   # Optionally remove images built from the repo
   if [ "$REMOVE_IMAGES" = true ]; then
-    info "Removing local images built from this project (srcs-*)"
-    docker rmi srcs-mariadb srcs-wordpress srcs-nginx >/dev/null 2>&1 || true
+    info "Removing local images built from this project (attempting project tags and legacy srcs-* tags)"
+    # Remove the explicit image tags we set in docker-compose.yml plus legacy compose-generated tags
+    docker rmi -f mariadb:1.0 wordpress:1.0 nginx:1.0 srcs-mariadb srcs-wordpress srcs-nginx >/dev/null 2>&1 || true
+
+    # Prune builder cache and dangling images to ensure a clean build environment
+    if command -v docker >/dev/null 2>&1; then
+      info "Pruning Docker build cache and dangling images (this is destructive but ensures no cached layers remain)"
+      docker builder prune -af >/dev/null 2>&1 || true
+      # buildx prune for buildx cache (if installed)
+      docker buildx prune -a -f >/dev/null 2>&1 || true
+      # remove dangling/unused images
+      docker image prune -af >/dev/null 2>&1 || true
+    fi
   fi
 
   # Remove host data directories (destructive)
@@ -492,6 +511,24 @@ perform_cleanup() {
   info "Cleanup completed"
 }
 
+# Build images with no cache (used after setup when BUILD_IMAGES=true)
+build_images_no_cache() {
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker not found; skipping image build"
+    return
+  fi
+
+  info "Building project images with --no-cache --pull to ensure fresh images"
+  # Prefer 'docker compose' (v2) if available, otherwise fall back to 'docker-compose'
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -f srcs/docker-compose.yml build --no-cache --pull --progress=plain || warn "docker compose build returned non-zero exit code"
+  elif command -v docker-compose >/dev/null 2>&1; then
+    docker-compose -f srcs/docker-compose.yml build --no-cache --pull || warn "docker-compose build returned non-zero exit code"
+  else
+    warn "No docker compose binary available to build images"
+  fi
+}
+
 main() {
   parse_args "$@"
 
@@ -506,16 +543,23 @@ main() {
   prepare_data_dirs
   ensure_hosts_mapping
 
+  # Optionally perform a fresh, no-cache build of the project images so timestamps and layers are new
+  if [ "$BUILD_IMAGES" = true ]; then
+    build_images_no_cache
+  else
+    info "Skipping image build (--no-build specified or BUILD_IMAGES=false)"
+  fi
+
   echo
   info "Setup completed. Next steps:"
   echo "  1) If this is your first Docker install and you were added to the docker group, log out and back in (or run: newgrp docker)."
   echo "  2) From the repo root, run: make up"
   echo
   info "Using configuration:"
-  echo "  DOMAIN_NAME=$(awk -F= '/^DOMAIN_NAME=/{print $2}' "$ENV_FILE")"
-  echo "  MYSQL_DATABASE=$(awk -F= '/^MYSQL_DATABASE=/{print $2}' "$ENV_FILE")"
-  echo "  MYSQL_USER=$(awk -F= '/^MYSQL_USER=/{print $2}' "$ENV_FILE")"
-  echo "  DATA_PATH=$(awk -F= '/^DATA_PATH=/{print $2}' "$ENV_FILE")"
+  echo "  DOMAIN_NAME=$(awk -F= '/^DOMAIN_NAME=/{print $2}' \"$ENV_FILE\")"
+  echo "  MYSQL_DATABASE=$(awk -F= '/^MYSQL_DATABASE=/{print $2}' \"$ENV_FILE\")"
+  echo "  MYSQL_USER=$(awk -F= '/^MYSQL_USER=/{print $2}' \"$ENV_FILE\")"
+  echo "  DATA_PATH=$(awk -F= '/^DATA_PATH=/{print $2}' \"$ENV_FILE\")"
 }
 
 main "$@"
